@@ -66,7 +66,7 @@ class CircleTubeApp:
     CIRCLE_COLOR = "#1d3557"
     PENDING_COLOR = "#e63946"
     DISK_BEZIER_MODE = "Disk-Bézier"
-    SKINNING_MODE = "Kör-bőrözés"
+    SKINNING_MODE = "Skinning mode"
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -98,6 +98,11 @@ class CircleTubeApp:
         mode_selector.pack(side=tk.LEFT, padx=(6, 0))
         mode_selector.bind("<<ComboboxSelected>>", self._on_mode_change)
 
+        reset_button = tk.Button(
+            controls, text="Reset", command=self._reset
+        )
+        reset_button.pack(side=tk.LEFT, padx=(6, 0))
+
         self.canvas = tk.Canvas(root, background="white", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Button-1>", self._on_click)
@@ -115,6 +120,8 @@ class CircleTubeApp:
             pady=6,
         )
         status_bar.pack(fill=tk.X)
+
+
 
     def _on_click(self, event: tk.Event) -> None:
         self.canvas.focus_set()
@@ -158,6 +165,13 @@ class CircleTubeApp:
             self.status.set("Kattints egy másik helyre a kör sugarához.")
         return "break"
 
+    def _reset(self) -> None:
+        """Reset the editor and clear all circles."""
+        self.editor.circles.clear()
+        self.editor.pending_center = None
+        self.status.set("Kattints a kör középpontjához.")
+        self._redraw()
+
     def _on_mouse_wheel(self, event: tk.Event) -> None:
         factor = 1.1 ** (event.delta / 120)
         self.view.zoom_at(factor, event.x, event.y)
@@ -183,7 +197,7 @@ class CircleTubeApp:
             self.curve_mode.get() == self.SKINNING_MODE
             and len(self.editor.circles) < 2
         ):
-            self.status.set("A kör-bőrözéshez legalább két kör szükséges.")
+            self.status.set("A skinning mode-hoz legalább két kör szükséges.")
         else:
             self.status.set(f"Megjelenítési mód: {self.curve_mode.get()}.")
         self._redraw()
@@ -209,7 +223,7 @@ class CircleTubeApp:
                         outline=self.TUBE_COLOR,
                     )
                 except SkinningError as error:
-                    self.status.set(f"A kör-bőrözés nem alkalmazható: {error}")
+                    self.status.set(f"A skinning mode nem alkalmazható: {error}")
                     rendered = False
             else:
                 samples = sample_disk_bezier(self.editor.circles)
