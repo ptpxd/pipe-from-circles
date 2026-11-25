@@ -37,9 +37,13 @@ python main.py
 3. Legalább két kör után megjelenik a csőszerű alakzat.
 4. További körök hozzáadásakor az alakzat automatikusan frissül.
 5. A **Görbemód** választóval válts a Disk-Bézier és a skinning mode között.
-6. A görgővel nagyíts vagy kicsinyíts a mutató helye körül.
-7. A középső egérgomb nyomva tartásával húzd el a nézetet.
-8. A rajzfelületre kattintás után a **Backspace** megszakítja a függőben lévő körközéppont
+6. Skinning módban a bemeneti körök teljes belseje kékkel van kitöltve.
+7. A kör két szemközti fogópontjának húzásával módosítsd a sugarát; a kör középpontja nem
+   változik.
+8. A kör belsejét a fogópontoktól távolabb húzva mozgasd a kört; a sugara változatlan marad.
+9. A görgővel nagyíts vagy kicsinyíts a mutató helye körül.
+10. A középső egérgomb nyomva tartásával húzd el a nézetet.
+11. A rajzfelületre kattintás után a **Backspace** megszakítja a függőben lévő körközéppont
    megadását; máskülönben eltávolítja az utolsó teljes kört.
 
 Ha a sugár megadásakor ugyanoda kattintasz, mint a középpontnál, a kör nem jön létre. Kattints

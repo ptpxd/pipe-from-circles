@@ -37,3 +37,23 @@ class CircleEditor:
             return False
         self.circles.pop()
         return True
+
+    def resize_circle(self, index: int, radius: float) -> None:
+        """Replace one circle with the requested positive radius."""
+        circle = self.circles[index]
+        self.circles[index] = Circle(
+            circle.center_x,
+            circle.center_y,
+            radius,
+        )
+
+    def move_circle(
+        self, index: int, center_x: float, center_y: float
+    ) -> None:
+        """Replace one circle at a new center while preserving its radius."""
+        circle = self.circles[index]
+        self.circles[index] = Circle(
+            center_x,
+            center_y,
+            circle.radius,
+        )

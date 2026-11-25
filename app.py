@@ -7,6 +7,7 @@ from tkinter import ttk
 
 from editor import CircleEditor
 from geometry import (
+    Circle,
     SkinningError,
     disk_bridge,
     sample_disk_bezier,
@@ -64,6 +65,9 @@ class ViewTransform:
 class CircleTubeApp:
     TUBE_COLOR = "#8ecae6"
     CIRCLE_COLOR = "#1d3557"
+    HANDLE_COLOR = "#457b9d"
+    HANDLE_RADIUS = 4
+    HANDLE_HIT_RADIUS = 8
     PENDING_COLOR = "#e63946"
     DISK_BEZIER_MODE = "Disk-Bézier"
     SKINNING_MODE = "Skinning mode"
@@ -77,6 +81,11 @@ class CircleTubeApp:
         self.editor = CircleEditor()
         self.view = ViewTransform()
         self._pan_last: tuple[int, int] | None = None
+        self._handle_angles: list[float] = []
+        self._drag_target: tuple[str, int, int] | None = None
+        self._drag_offset: tuple[float, float] | None = None
+        self._drag_start: tuple[float, float] | None = None
+        self._drag_moved = False
         self.status = tk.StringVar(
             value="Kattints a rajzfelületre az első kör középpontjához."
         )
@@ -105,7 +114,9 @@ class CircleTubeApp:
 
         self.canvas = tk.Canvas(root, background="white", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
+        self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
         self.canvas.bind("<BackSpace>", self._on_backspace)
         self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
         self.canvas.bind("<ButtonPress-2>", self._on_pan_start)
@@ -121,7 +132,149 @@ class CircleTubeApp:
         )
         status_bar.pack(fill=tk.X)
 
+    def _sync_handle_angles(self) -> None:
+        while len(self._handle_angles) < len(self.editor.circles):
+            self._handle_angles.append(0.0)
+        del self._handle_angles[len(self.editor.circles) :]
 
+    def _handle_radius(self, circle: Circle) -> float:
+        screen_radius = circle.radius * self.view.scale
+        return min(self.HANDLE_RADIUS, screen_radius * 0.25)
+
+    def _handle_hit_radius(self, circle: Circle) -> float:
+        screen_radius = circle.radius * self.view.scale
+        padding = min(2.0, screen_radius * 0.25)
+        return min(
+            self.HANDLE_HIT_RADIUS,
+            self._handle_radius(circle) + padding,
+        )
+
+    def _find_resize_handle(
+        self, screen_x: float, screen_y: float
+    ) -> tuple[int, int] | None:
+        self._sync_handle_angles()
+        selected: tuple[int, int] | None = None
+        closest_distance = self.HANDLE_HIT_RADIUS
+        for index in range(len(self.editor.circles) - 1, -1, -1):
+            circle = self.editor.circles[index]
+            angle = self._handle_angles[index]
+            for side in (1, -1):
+                world_x = (
+                    circle.center_x
+                    + side * circle.radius * math.cos(angle)
+                )
+                world_y = (
+                    circle.center_y
+                    + side * circle.radius * math.sin(angle)
+                )
+                handle_x, handle_y = self.view.to_screen(world_x, world_y)
+                distance = math.hypot(
+                    screen_x - handle_x,
+                    screen_y - handle_y,
+                )
+                if (
+                    distance <= self._handle_hit_radius(circle)
+                    and (
+                        selected is None or distance < closest_distance
+                    )
+                ):
+                    selected = (index, side)
+                    closest_distance = distance
+        return selected
+
+    def _on_canvas_press(self, event: tk.Event) -> None:
+        self.canvas.focus_set()
+        if self.editor.pending_center is not None:
+            self._drag_target = None
+            self._drag_offset = None
+            self._drag_start = None
+            self._drag_moved = False
+            self._on_click(event)
+            return
+
+        handle = self._find_resize_handle(event.x, event.y)
+        if handle is not None:
+            index, side = handle
+            self._drag_target = ("resize", index, side)
+            self._drag_offset = None
+            self._drag_start = (event.x, event.y)
+            self._drag_moved = False
+            return
+
+        world_x, world_y = self.view.to_world(event.x, event.y)
+        for index in range(len(self.editor.circles) - 1, -1, -1):
+            circle = self.editor.circles[index]
+            if (
+                math.hypot(
+                    world_x - circle.center_x,
+                    world_y - circle.center_y,
+                )
+                <= circle.radius
+            ):
+                self._drag_target = ("move", index, 0)
+                self._drag_offset = (
+                    world_x - circle.center_x,
+                    world_y - circle.center_y,
+                )
+                self._drag_start = (event.x, event.y)
+                self._drag_moved = False
+                return
+
+        self._drag_target = None
+        self._drag_offset = None
+        self._drag_start = None
+        self._drag_moved = False
+        self._on_click(event)
+
+    def _on_canvas_drag(self, event: tk.Event) -> None:
+        if self._drag_target is None or self._drag_start is None:
+            return
+        if not self._drag_moved:
+            action = self._drag_target[0]
+            movement_threshold = 1.5 if action == "resize" else 3
+            if (
+                math.hypot(
+                    event.x - self._drag_start[0],
+                    event.y - self._drag_start[1],
+                )
+                < movement_threshold
+            ):
+                return
+            self._drag_moved = True
+
+        action, index, side = self._drag_target
+        world_x, world_y = self.view.to_world(event.x, event.y)
+        circle = self.editor.circles[index]
+        if action == "resize":
+            delta_x = world_x - circle.center_x
+            delta_y = world_y - circle.center_y
+            radius = math.hypot(delta_x, delta_y)
+            if radius > 1e-6:
+                self._handle_angles[index] = math.atan2(
+                    delta_y, delta_x
+                ) - (math.pi if side < 0 else 0.0)
+            self.editor.resize_circle(index, max(radius, 1e-6))
+        else:
+            if self._drag_offset is None:
+                return
+            self.editor.move_circle(
+                index,
+                world_x - self._drag_offset[0],
+                world_y - self._drag_offset[1],
+            )
+        self._redraw()
+
+    def _on_canvas_release(self, event: tk.Event) -> None:
+        if (
+            self._drag_target is not None
+            and self._drag_target[0] == "move"
+            and not self._drag_moved
+        ):
+            self._on_click(event)
+        self._drag_target = None
+        self._drag_offset = None
+        self._drag_start = None
+        self._drag_moved = False
 
     def _on_click(self, event: tk.Event) -> None:
         self.canvas.focus_set()
@@ -204,6 +357,7 @@ class CircleTubeApp:
 
     def _redraw(self) -> bool:
         self.canvas.delete("all")
+        self._sync_handle_angles()
         rendered = True
 
         if len(self.editor.circles) >= 2:
@@ -257,7 +411,7 @@ class CircleTubeApp:
                         outline=self.TUBE_COLOR,
                     )
 
-        for circle in self.editor.circles:
+        for index, circle in enumerate(self.editor.circles):
             center_x, center_y = self.view.to_screen(
                 circle.center_x, circle.center_y
             )
@@ -267,9 +421,32 @@ class CircleTubeApp:
                 center_y - radius,
                 center_x + radius,
                 center_y + radius,
+                fill=(
+                    self.TUBE_COLOR
+                    if self.curve_mode.get() == self.SKINNING_MODE
+                    else ""
+                ),
                 outline=self.CIRCLE_COLOR,
                 width=2,
             )
+            angle = self._handle_angles[index]
+            for side in (1, -1):
+                handle_x, handle_y = self.view.to_screen(
+                    circle.center_x
+                    + side * circle.radius * math.cos(angle),
+                    circle.center_y
+                    + side * circle.radius * math.sin(angle),
+                )
+                handle_radius = self._handle_radius(circle)
+                self.canvas.create_oval(
+                    handle_x - handle_radius,
+                    handle_y - handle_radius,
+                    handle_x + handle_radius,
+                    handle_y + handle_radius,
+                    fill=self.HANDLE_COLOR,
+                    outline="white",
+                    width=1,
+                )
 
         if self.editor.pending_center is not None:
             center_x, center_y = self.view.to_screen(

@@ -18,11 +18,14 @@ class FakeCanvas:
 
 
 class FakeVariable:
-    def __init__(self):
-        self.value = ""
+    def __init__(self, value=""):
+        self.value = value
 
     def set(self, value):
         self.value = value
+
+    def get(self):
+        return self.value
 
 
 class ViewTransformTests(unittest.TestCase):
@@ -68,6 +71,8 @@ class ViewTransformTests(unittest.TestCase):
         app.editor = CircleEditor()
         app.canvas = FakeCanvas()
         app.status = FakeVariable()
+        app.curve_mode = FakeVariable(app.DISK_BEZIER_MODE)
+        app._handle_angles = []
 
         app._on_click(SimpleNamespace(x=14, y=26))
         app._on_click(SimpleNamespace(x=20, y=26))
