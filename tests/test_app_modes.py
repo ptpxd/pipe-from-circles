@@ -91,6 +91,47 @@ class CircleTubeModeTests(unittest.TestCase):
         self.assertNotIn("nem alkalmazható", app.status.get())
         self.assertGreater(len(app.canvas.ovals), 0)
 
+    def test_sharp_turn_skinning_renders_without_changing_circles(self):
+        circles = [
+            Circle(0, 0, 10),
+            Circle(300, 0, 10),
+            Circle(4.56, 52.09, 10),
+        ]
+        app = self.make_app(circles)
+        app.curve_mode.set(app.SKINNING_MODE)
+
+        app._redraw()
+
+        self.assertEqual(len(app.canvas.polygons), 1)
+        self.assertEqual(app.editor.circles, circles)
+        self.assertNotIn("nem alkalmazható", app.status.get())
+
+    def test_overlapping_circle_skinning_renders_or_reports_without_data_loss(self):
+        overlapping_circles = [Circle(0, 0, 2), Circle(3, 0, 2)]
+        valid_app = self.make_app(overlapping_circles)
+        valid_app.curve_mode.set(valid_app.SKINNING_MODE)
+
+        valid_app._redraw()
+
+        self.assertEqual(len(valid_app.canvas.polygons), 1)
+        self.assertEqual(valid_app.editor.circles, overlapping_circles)
+        self.assertNotIn("nem alkalmazható", valid_app.status.get())
+
+        invalid_circles = [
+            Circle(0, 0, 2),
+            Circle(3, 0, 2),
+            Circle(2, 3, 2),
+        ]
+        invalid_app = self.make_app(invalid_circles)
+        invalid_app.curve_mode.set(invalid_app.SKINNING_MODE)
+
+        invalid_app._redraw()
+
+        self.assertEqual(invalid_app.canvas.polygons, [])
+        self.assertEqual(invalid_app.editor.circles, invalid_circles)
+        self.assertGreater(len(invalid_app.canvas.ovals), 0)
+        self.assertIn("nem alkalmazható", invalid_app.status.get())
+
     def test_skinning_mode_explains_when_fewer_than_two_circles_exist(self):
         circles = [Circle(0, 0, 2)]
         app = self.make_app(circles)

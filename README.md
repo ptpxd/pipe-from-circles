@@ -51,11 +51,13 @@ ismét, a középponttól eltérő helyre.
 
 A körök sorrendben Disk-Bézier vezérlőkorongként szerepelnek. Az első és az utolsó körhöz
 illeszkedik a görbe; a belső körök vezérlőadatok, ezért nem feltétlenül érinti őket a cső.
-Skinning mode-nál a külső közös érintők, illetve a helyi középponti irányokból számított
-érintőpontok adják a Hermite-szakaszok végpontjait. A módszer nem alkalmazható minden
-körkonfigurációra: például egybeeső, közel kollineáris, élesen visszaforduló vagy önmetsző
-elrendezésnél hibaüzenetet kapsz. Ilyenkor a körök megmaradnak, és visszaválthatsz
-Disk-Bézier módra.
+Skinning módban a körök irányát követő Hermite-szakaszok és kerekített végzárások alkotják a
+kontúrt. Az éles, akár közel 170 fokos kanyarok, a közel egyenes szakaszok, az eltérő méretű
+körök, valamint a közeli vagy részben átfedő körök is működhetnek, ha egyszerű, a köröket
+körülvevő kontúr készíthető. A rendszer a teljes kontúrt ellenőrzi; ha egy konfiguráció
+egybeeső középpont, egymásba ágyazott kör, visszafordulás vagy önmetszés miatt nem kezelhető,
+érthető hibaüzenetet ad, de a köröket és sorrendjüket megőrzi. Ilyenkor folytathatod a
+szerkesztést, vagy visszaválthatsz Disk-Bézier módra.
 
 ## Tesztek futtatása
 

@@ -54,7 +54,18 @@ def _external_tangents(
     dx = second.center_x - first.center_x
     dy = second.center_y - first.center_y
     distance = math.hypot(dx, dy)
-    if distance <= abs(first.radius - second.radius) + 1e-9:
+    radius_difference = abs(first.radius - second.radius)
+    coordinate_scale = max(
+        abs(first.center_x),
+        abs(first.center_y),
+        abs(second.center_x),
+        abs(second.center_y),
+        distance,
+        first.radius,
+        second.radius,
+    )
+    tolerance = 8 * math.ulp(coordinate_scale)
+    if distance <= radius_difference + tolerance:
         raise SkinningError(
             "A szomszédos körök között nem létezik külső közös érintő."
         )
@@ -82,56 +93,89 @@ def _external_tangents(
     return segments[0], segments[1]
 
 
-def _transition(
+def _circle_arc_segments(
+    circle: Circle,
     start: tuple[float, float],
     end: tuple[float, float],
-    tangent_start: tuple[float, float],
-    tangent_end: tuple[float, float],
-) -> HermiteSegment | None:
-    distance = math.hypot(end[0] - start[0], end[1] - start[1])
-    if distance <= 1e-9:
-        return None
+) -> list[HermiteSegment]:
+    start_angle = math.atan2(start[1] - circle.center_y, start[0] - circle.center_x)
+    end_angle = math.atan2(end[1] - circle.center_y, end[0] - circle.center_x)
+    sweep = -((start_angle - end_angle) % (2 * math.pi))
+    if sweep == 0:
+        return []
 
-    start_length = math.hypot(*tangent_start)
-    end_length = math.hypot(*tangent_end)
-    if start_length <= 1e-9 or end_length <= 1e-9:
-        raise SkinningError("A körérintési érintő iránya nem határozható meg.")
-    start_scale = distance / start_length
-    end_scale = distance / end_length
-    return HermiteSegment(
-        start,
-        end,
-        (tangent_start[0] * start_scale, tangent_start[1] * start_scale),
-        (tangent_end[0] * end_scale, tangent_end[1] * end_scale),
-    )
+    segment_count = max(1, math.ceil(abs(sweep) / (math.pi / 2)))
+    angle_step = sweep / segment_count
+    tangent_scale = 4 * circle.radius * math.tan(abs(angle_step) / 4)
+    segments = []
+
+    for index in range(segment_count):
+        first_angle = start_angle + angle_step * index
+        second_angle = start_angle + angle_step * (index + 1)
+        first_point = (
+            start
+            if index == 0
+            else (
+                circle.center_x + circle.radius * math.cos(first_angle),
+                circle.center_y + circle.radius * math.sin(first_angle),
+            )
+        )
+        second_point = (
+            end
+            if index == segment_count - 1
+            else (
+                circle.center_x + circle.radius * math.cos(second_angle),
+                circle.center_y + circle.radius * math.sin(second_angle),
+            )
+        )
+        segments.append(
+            HermiteSegment(
+                first_point,
+                second_point,
+                (
+                    tangent_scale * math.sin(first_angle),
+                    -tangent_scale * math.cos(first_angle),
+                ),
+                (
+                    tangent_scale * math.sin(second_angle),
+                    -tangent_scale * math.cos(second_angle),
+                ),
+            )
+        )
+
+    return segments
 
 
 def _validate_centerline(circles: Sequence[Circle]) -> None:
+    directions = []
     for first, second in zip(circles, circles[1:]):
-        if math.hypot(
-            second.center_x - first.center_x,
-            second.center_y - first.center_y,
-        ) <= 1e-9:
-            raise SkinningError("Két szomszédos kör középpontja egybeesik.")
-
-    for first, middle, last in zip(circles, circles[1:], circles[2:]):
-        first_x = middle.center_x - first.center_x
-        first_y = middle.center_y - first.center_y
-        second_x = last.center_x - middle.center_x
-        second_y = last.center_y - middle.center_y
-        first_length = math.hypot(first_x, first_y)
-        second_length = math.hypot(second_x, second_y)
-        cross = first_x * second_y - first_y * second_x
-        if abs(cross) <= 1e-8 * first_length * second_length:
+        dx = second.center_x - first.center_x
+        dy = second.center_y - first.center_y
+        distance = math.hypot(dx, dy)
+        if not math.isfinite(distance):
             raise SkinningError(
-                "A három egymást követő kör közel kollineáris; "
-                "a bőrözés nem stabil."
+                "A körök távolsága kívül esik a számítható tartományon."
             )
-        direction_dot = (
-            first_x * second_x + first_y * second_y
-        ) / (first_length * second_length)
-        if direction_dot <= -0.95:
-            raise SkinningError("A körök sorrendje éles irányváltást tartalmaz.")
+        if distance == 0:
+            raise SkinningError("Két szomszédos kör középpontja egybeesik.")
+        directions.append((dx / distance, dy / distance))
+
+    for first_direction, second_direction in zip(directions, directions[1:]):
+        cross = (
+            first_direction[0] * second_direction[1]
+            - first_direction[1] * second_direction[0]
+        )
+        dot = (
+            first_direction[0] * second_direction[0]
+            + first_direction[1] * second_direction[1]
+        )
+        if (
+            dot < 0
+            and abs(cross) <= 32 * math.ulp(1.0)
+        ):
+            raise SkinningError(
+                "A pontos visszafordulásnál nem határozható meg a kanyar oldala."
+            )
 
 
 def _point_inside_other_circle(
@@ -144,19 +188,18 @@ def _point_inside_other_circle(
             point[0] - circle.center_x,
             point[1] - circle.center_y,
         )
-        if distance < circle.radius - 1e-8:
+        coordinate_scale = max(
+            abs(point[0]),
+            abs(point[1]),
+            abs(circle.center_x),
+            abs(circle.center_y),
+            distance,
+            circle.radius,
+        )
+        tolerance = 8 * math.ulp(coordinate_scale)
+        if distance < circle.radius - tolerance:
             return True
     return False
-
-
-def _orientation(
-    first: tuple[float, float],
-    second: tuple[float, float],
-    third: tuple[float, float],
-) -> float:
-    return (second[0] - first[0]) * (third[1] - first[1]) - (
-        second[1] - first[1]
-    ) * (third[0] - first[0])
 
 
 def _segments_intersect(
@@ -165,38 +208,84 @@ def _segments_intersect(
     second_start: tuple[float, float],
     second_end: tuple[float, float],
 ) -> bool:
-    tolerance = 1e-9
-    first_a = _orientation(first_start, first_end, second_start)
-    first_b = _orientation(first_start, first_end, second_end)
-    second_a = _orientation(second_start, second_end, first_start)
-    second_b = _orientation(second_start, second_end, first_end)
+    def normalized_orientation(
+        start: tuple[float, float],
+        end: tuple[float, float],
+        point: tuple[float, float],
+    ) -> float:
+        first_x = end[0] - start[0]
+        first_y = end[1] - start[1]
+        second_x = point[0] - start[0]
+        second_y = point[1] - start[1]
+        first_length = math.hypot(first_x, first_y)
+        second_length = math.hypot(second_x, second_y)
+        if first_length == 0 or second_length == 0:
+            return 0.0
+        return (
+            (first_x / first_length) * (second_y / second_length)
+            - (first_y / first_length) * (second_x / second_length)
+        )
+
+    tolerance = 32 * math.ulp(1.0)
+    first_a = normalized_orientation(first_start, first_end, second_start)
+    first_b = normalized_orientation(first_start, first_end, second_end)
+    second_a = normalized_orientation(second_start, second_end, first_start)
+    second_b = normalized_orientation(second_start, second_end, first_end)
 
     def on_segment(
         start: tuple[float, float],
         end: tuple[float, float],
         point: tuple[float, float],
     ) -> bool:
+        scale = max(
+            math.hypot(end[0] - start[0], end[1] - start[1]),
+            1e-300,
+        )
+        coordinate_scale = max(
+            abs(start[0]),
+            abs(start[1]),
+            abs(end[0]),
+            abs(end[1]),
+            abs(point[0]),
+            abs(point[1]),
+        )
+        position_tolerance = max(
+            scale * 32 * math.ulp(1.0),
+            8 * math.ulp(coordinate_scale),
+        )
         return (
-            min(start[0], end[0]) - tolerance
+            min(start[0], end[0]) - position_tolerance
             <= point[0]
-            <= max(start[0], end[0]) + tolerance
-            and min(start[1], end[1]) - tolerance
+            <= max(start[0], end[0]) + position_tolerance
+            and min(start[1], end[1]) - position_tolerance
             <= point[1]
-            <= max(start[1], end[1]) + tolerance
+            <= max(start[1], end[1]) + position_tolerance
         )
 
-    if first_a * first_b < -tolerance and second_a * second_b < -tolerance:
+    def sign(value: float) -> int:
+        if value > tolerance:
+            return 1
+        if value < -tolerance:
+            return -1
+        return 0
+
+    first_a_sign = sign(first_a)
+    first_b_sign = sign(first_b)
+    second_a_sign = sign(second_a)
+    second_b_sign = sign(second_b)
+    if (
+        first_a_sign * first_b_sign < 0
+        and second_a_sign * second_b_sign < 0
+    ):
         return True
     return (
-        abs(first_a) <= tolerance and on_segment(first_start, first_end, second_start)
+        first_a_sign == 0 and on_segment(first_start, first_end, second_start)
     ) or (
-        abs(first_b) <= tolerance and on_segment(first_start, first_end, second_end)
+        first_b_sign == 0 and on_segment(first_start, first_end, second_end)
     ) or (
-        abs(second_a) <= tolerance
-        and on_segment(second_start, second_end, first_start)
+        second_a_sign == 0 and on_segment(second_start, second_end, first_start)
     ) or (
-        abs(second_b) <= tolerance
-        and on_segment(second_start, second_end, first_end)
+        second_b_sign == 0 and on_segment(second_start, second_end, first_end)
     )
 
 
@@ -214,19 +303,196 @@ def _sample_segments(
 
 def _validate_simple_contour(points: Sequence[tuple[float, float]]) -> None:
     edge_count = len(points) - 1
-    for first_index in range(edge_count):
-        for second_index in range(first_index + 2, edge_count):
-            if first_index == 0 and second_index == edge_count - 1:
+    ordered_edges = []
+    for index in range(edge_count):
+        start = points[index]
+        end = points[index + 1]
+        coordinate_scale = max(
+            abs(start[0]),
+            abs(start[1]),
+            abs(end[0]),
+            abs(end[1]),
+        )
+        length = math.hypot(end[0] - start[0], end[1] - start[1])
+        tolerance = max(
+            length * 32 * math.ulp(1.0),
+            8 * math.ulp(coordinate_scale),
+        )
+        ordered_edges.append(
+            (
+                min(start[0], end[0]) - tolerance,
+                max(start[0], end[0]) + tolerance,
+                min(start[1], end[1]) - tolerance,
+                max(start[1], end[1]) + tolerance,
+                index,
+            )
+        )
+
+    ordered_edges.sort(key=lambda edge: edge[0])
+    active_edges = []
+    for current in ordered_edges:
+        min_x, max_x, min_y, max_y, current_index = current
+        active_edges = [
+            edge for edge in active_edges if edge[1] >= min_x
+        ]
+        for other in active_edges:
+            if other[3] < min_y or max_y < other[2]:
+                continue
+            other_index = other[4]
+            if (
+                abs(current_index - other_index) <= 1
+                or {current_index, other_index} == {0, edge_count - 1}
+            ):
                 continue
             if _segments_intersect(
-                points[first_index],
-                points[first_index + 1],
-                points[second_index],
-                points[second_index + 1],
+                points[current_index],
+                points[current_index + 1],
+                points[other_index],
+                points[other_index + 1],
             ):
                 raise SkinningError(
                     "A bőrözési kontúr önmetsző; válassz más körkonfigurációt."
                 )
+        active_edges.append(current)
+
+
+def _point_inside_contour(
+    point: tuple[float, float],
+    contour: Sequence[tuple[float, float]],
+) -> bool:
+    x, y = point
+    inside = False
+    for start, end in zip(contour, contour[1:]):
+        if (start[1] > y) != (end[1] > y):
+            crossing_x = start[0] + (y - start[1]) * (
+                end[0] - start[0]
+            ) / (end[1] - start[1])
+            if x < crossing_x:
+                inside = not inside
+    return inside
+
+
+def _distance_to_segment(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    length_squared = dx * dx + dy * dy
+    if length_squared == 0:
+        return math.hypot(point[0] - start[0], point[1] - start[1])
+
+    projection = (
+        (point[0] - start[0]) * dx + (point[1] - start[1]) * dy
+    ) / length_squared
+    projection = min(1.0, max(0.0, projection))
+    closest = (start[0] + projection * dx, start[1] + projection * dy)
+    return math.hypot(point[0] - closest[0], point[1] - closest[1])
+
+
+def _validate_circle_containment(
+    contour: Sequence[tuple[float, float]],
+    circles: Sequence[Circle],
+) -> None:
+    for circle in circles:
+        center = (circle.center_x, circle.center_y)
+        if not _point_inside_contour(center, contour):
+            raise SkinningError(
+                "A bőrözési kontúr nem foglalja magában az összes bemeneti kört."
+            )
+
+        boundary_distance = math.inf
+        for start, end in zip(contour, contour[1:]):
+            min_x = min(start[0], end[0])
+            max_x = max(start[0], end[0])
+            min_y = min(start[1], end[1])
+            max_y = max(start[1], end[1])
+            dx = max(min_x - center[0], 0, center[0] - max_x)
+            dy = max(min_y - center[1], 0, center[1] - max_y)
+            if dx * dx + dy * dy >= boundary_distance * boundary_distance:
+                continue
+            boundary_distance = _distance_to_segment(center, start, end)
+        coordinate_scale = max(
+            abs(circle.center_x),
+            abs(circle.center_y),
+            circle.radius,
+        )
+        tolerance = max(
+            circle.radius * 64 * math.ulp(1.0),
+            8 * math.ulp(coordinate_scale),
+        )
+        if boundary_distance < circle.radius - tolerance:
+            raise SkinningError(
+                "A bőrözési kontúr nem foglalja magában az összes bemeneti kört."
+            )
+
+
+def _enclose_circles(
+    contour: Sequence[tuple[float, float]],
+    circles: Sequence[Circle],
+) -> list[tuple[float, float]]:
+    if not contour or contour[0] != contour[-1]:
+        raise SkinningError("A bőrözési kontúr nem zárható biztonságosan.")
+
+    points = list(contour[:-1])
+    if len(points) < 3:
+        raise SkinningError("A bőrözési kontúr nem alkot zárt tartományt.")
+
+    for _ in range(32):
+        adjusted = False
+        for index in range(len(points)):
+            next_index = (index + 1) % len(points)
+            for circle in circles:
+                start = points[index]
+                end = points[next_index]
+                center = (circle.center_x, circle.center_y)
+                coordinate_scale = max(
+                    abs(circle.center_x),
+                    abs(circle.center_y),
+                    circle.radius,
+                )
+                tolerance = max(
+                    circle.radius * 64 * math.ulp(1.0),
+                    8 * math.ulp(coordinate_scale),
+                )
+                if (
+                    max(start[0], end[0]) < center[0] - circle.radius - tolerance
+                    or min(start[0], end[0])
+                    > center[0] + circle.radius + tolerance
+                    or max(start[1], end[1])
+                    < center[1] - circle.radius - tolerance
+                    or min(start[1], end[1])
+                    > center[1] + circle.radius + tolerance
+                ):
+                    continue
+                distance = _distance_to_segment(center, start, end)
+                if distance >= circle.radius - tolerance:
+                    continue
+                if distance == 0:
+                    raise SkinningError(
+                        "A kontúr nem kerülhető biztonságosan a kör középpontja körül."
+                    )
+
+                factor = (circle.radius + tolerance) / distance
+                points[index] = (
+                    center[0] + (start[0] - center[0]) * factor,
+                    center[1] + (start[1] - center[1]) * factor,
+                )
+                points[next_index] = (
+                    center[0] + (end[0] - center[0]) * factor,
+                    center[1] + (end[1] - center[1]) * factor,
+                )
+                adjusted = True
+        if not adjusted:
+            result = points + [points[0]]
+            _validate_simple_contour(result)
+            _validate_circle_containment(result, circles)
+            return result
+
+    raise SkinningError(
+        "A bemeneti köröket nem lehet egyszerű skinning kontúrral körülvenni."
+    )
 
 
 def build_skinning_segments(
@@ -251,15 +517,20 @@ def build_skinning_segments(
 
         centerline_tangents = [directions[0]]
         for previous, following in zip(directions, directions[1:]):
-            tangent_x = previous[0] + following[0]
-            tangent_y = previous[1] + following[1]
-            tangent_length = math.hypot(tangent_x, tangent_y)
-            if tangent_length <= 1e-8:
+            turn_cross = previous[0] * following[1] - previous[1] * following[0]
+            turn_dot = previous[0] * following[0] + previous[1] * following[1]
+            if turn_cross == 0.0 and turn_dot < 0.0:
                 raise SkinningError(
-                    "A körök sorrendje éles irányváltást tartalmaz."
+                    "A pontos visszafordulásnál nem határozható meg a kanyar oldala."
                 )
+            half_turn = 0.5 * math.atan2(turn_cross, turn_dot)
+            cosine = math.cos(half_turn)
+            sine = math.sin(half_turn)
             centerline_tangents.append(
-                (tangent_x / tangent_length, tangent_y / tangent_length)
+                (
+                    previous[0] * cosine - previous[1] * sine,
+                    previous[0] * sine + previous[1] * cosine,
+                )
             )
         centerline_tangents.append(directions[-1])
 
@@ -335,14 +606,13 @@ def build_skinning_segments(
     for bridge in upper:
         segments.append(bridge)
 
-    end_cap = _transition(
-        upper[-1].end,
-        lower[-1].end,
-        upper[-1].tangent_end,
-        (-lower[-1].tangent_end[0], -lower[-1].tangent_end[1]),
+    segments.extend(
+        _circle_arc_segments(
+            circles[-1],
+            upper[-1].end,
+            lower[-1].end,
+        )
     )
-    if end_cap is not None:
-        segments.append(end_cap)
 
     for index in range(len(lower) - 1, -1, -1):
         bridge = lower[index]
@@ -354,32 +624,31 @@ def build_skinning_segments(
         )
         segments.append(reversed_bridge)
 
-    start_cap = _transition(
-        lower[0].start,
-        upper[0].start,
-        (-lower[0].tangent_start[0], -lower[0].tangent_start[1]),
-        upper[0].tangent_start,
+    segments.extend(
+        _circle_arc_segments(
+            circles[0],
+            lower[0].start,
+            upper[0].start,
+        )
     )
-    if start_cap is not None:
-        segments.append(start_cap)
 
-    contour = _sample_segments(segments, steps_per_segment=12)
+    contour = _sample_segments(segments, steps_per_segment=32)
     if not contour or contour[0] != contour[-1]:
         raise SkinningError("A bőrözési kontúr nem zárható biztonságosan.")
     _validate_simple_contour(contour)
+    _enclose_circles(contour, circles)
     return segments
 
 
 def sample_skinning(
-    circles: Sequence[Circle], steps_per_segment: int = 16
+    circles: Sequence[Circle], steps_per_segment: int = 32
 ) -> list[tuple[float, float]]:
     """Sample a validated circle-skinning contour for rendering."""
     if steps_per_segment < 2:
         raise ValueError("At least two steps per segment are required.")
     segments = build_skinning_segments(circles)
     points = _sample_segments(segments, steps_per_segment)
-    _validate_simple_contour(points)
-    return points
+    return _enclose_circles(points, circles)
 
 
 def evaluate_disk_bezier(circles: Sequence[Circle], t: float) -> Circle:
